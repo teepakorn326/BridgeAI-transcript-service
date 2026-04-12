@@ -58,9 +58,19 @@ def fetch_whisper_transcript(video_id: str):
     with tempfile.TemporaryDirectory() as tmpdir:
         audio_path = os.path.join(tmpdir, "audio.mp3")
 
+        # Use cookies to bypass YouTube bot detection on cloud IPs.
+        # Looks for /etc/secrets/cookies.txt (Render secret file) or ./cookies.txt
+        cookies_path = None
+        for candidate in ("/etc/secrets/cookies.txt", "cookies.txt"):
+            if os.path.exists(candidate):
+                cookies_path = candidate
+                logger.info(f"Using cookies from {candidate}")
+                break
+
         ydl_opts = {
             "format": "bestaudio/best",
             "outtmpl": audio_path,
+            "cookiefile": cookies_path,
             "postprocessors": [
                 {
                     "key": "FFmpegExtractAudio",
