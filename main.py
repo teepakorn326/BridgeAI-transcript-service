@@ -11,7 +11,7 @@ import yt_dlp
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="EduCaption Transcript Service")
+app = FastAPI(title="BridgeAI Transcript Service")
 
 app.add_middleware(
     CORSMiddleware,
