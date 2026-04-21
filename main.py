@@ -22,8 +22,9 @@ app.add_middleware(
 
 # Load Whisper model once at startup (use "base" for speed, "small" for accuracy)
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
-MAX_DURATION = int(os.getenv("MAX_DURATION", "900"))  # 15 minutes default
-logger.info(f"Loading Whisper model: {WHISPER_MODEL}, max duration: {MAX_DURATION}s")
+MAX_DURATION_CAPTIONS = int(os.getenv("MAX_DURATION_CAPTIONS", "14400"))  # 4 hours — just text
+MAX_DURATION_WHISPER = int(os.getenv("MAX_DURATION_WHISPER", "3600"))    # 1 hour — CPU-intensive
+logger.info(f"Loading Whisper model: {WHISPER_MODEL}, max captions: {MAX_DURATION_CAPTIONS}s, max whisper: {MAX_DURATION_WHISPER}s")
 whisper_model = WhisperModel(WHISPER_MODEL, compute_type="int8")
 logger.info("Whisper model loaded")
 
@@ -39,12 +40,12 @@ def fetch_youtube_transcript(video_id: str):
     segments = []
     for snippet in transcript:
         start = round(snippet.start, 2)
-        if start >= MAX_DURATION:
+        if start >= MAX_DURATION_CAPTIONS:
             break
         segments.append(
             {
                 "start_seconds": start,
-                "end_seconds": min(round(snippet.start + snippet.duration, 2), MAX_DURATION),
+                "end_seconds": min(round(snippet.start + snippet.duration, 2), MAX_DURATION_CAPTIONS),
                 "text": snippet.text,
             }
         )
@@ -78,7 +79,7 @@ def fetch_whisper_transcript(video_id: str):
                     "preferredquality": "96",
                 }
             ],
-            "download_ranges": lambda info, ydl: [{"start_time": 0, "end_time": MAX_DURATION}],
+            "download_ranges": lambda info, ydl: [{"start_time": 0, "end_time": MAX_DURATION_WHISPER}],
             "quiet": True,
             "no_warnings": True,
         }
@@ -96,12 +97,12 @@ def fetch_whisper_transcript(video_id: str):
 
         segments = []
         for seg in result_segments:
-            if seg.start >= MAX_DURATION:
+            if seg.start >= MAX_DURATION_WHISPER:
                 break
             segments.append(
                 {
                     "start_seconds": round(seg.start, 2),
-                    "end_seconds": min(round(seg.end, 2), MAX_DURATION),
+                    "end_seconds": min(round(seg.end, 2), MAX_DURATION_WHISPER),
                     "text": seg.text.strip(),
                 }
             )
