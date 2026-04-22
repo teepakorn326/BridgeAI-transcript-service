@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 import logging
 
@@ -60,12 +61,17 @@ def fetch_whisper_transcript(video_id: str):
         audio_path = os.path.join(tmpdir, "audio.mp3")
 
         # Use cookies to bypass YouTube bot detection on cloud IPs.
-        # Looks for /etc/secrets/cookies.txt (Render secret file) or ./cookies.txt
+        # Looks for /etc/secrets/cookies.txt (Render Secret Files) or ./cookies.txt.
+        # yt-dlp writes refreshed session cookies back to this file, so the
+        # source must be copied to a writable location — Render's /etc/secrets
+        # is a read-only mount.
         cookies_path = None
         for candidate in ("/etc/secrets/cookies.txt", "cookies.txt"):
             if os.path.exists(candidate):
-                cookies_path = candidate
-                logger.info(f"Using cookies from {candidate}")
+                writable = os.path.join(tmpdir, "cookies.txt")
+                shutil.copy2(candidate, writable)
+                cookies_path = writable
+                logger.info(f"Copied cookies from {candidate} to {writable}")
                 break
 
         ydl_opts = {
