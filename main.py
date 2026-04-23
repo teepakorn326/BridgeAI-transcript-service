@@ -254,7 +254,10 @@ def fetch_whisper_transcript(video_id):
             logger.info(f"Copied cookies to {cookies}")
 
         ydl_opts = {
-            "format": "bestaudio/best",
+            # Progressively more lenient: audio-only (any codec) → audio-only
+            # (strict) → best combined stream. Mobile player clients return
+            # narrower format sets, so we need fallbacks.
+            "format": "bestaudio*/bestaudio/best",
             "outtmpl": audio_path,
             "cookiefile": cookies,
             "extractor_args": {"youtube": {"player_client": YOUTUBE_PLAYER_CLIENTS}},
