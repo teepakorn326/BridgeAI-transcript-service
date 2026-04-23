@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from faster_whisper import WhisperModel
 from youtube_transcript_api import YouTubeTranscriptApi
+from youtube_transcript_api.proxies import GenericProxyConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -59,6 +60,31 @@ YOUTUBE_MOBILE_UA = (
     "Mobile/15E148 Safari/604.1"
 )
 
+YT_PROXY = os.getenv("YT_PROXY") or None
+if YT_PROXY:
+    # Log only the host:port, never the full URL (contains credentials).
+    try:
+        from urllib.parse import urlparse
+        _p = urlparse(YT_PROXY)
+        logger.info(f"YT_PROXY configured: {_p.hostname}:{_p.port}")
+    except Exception:
+        logger.info("YT_PROXY configured (unparseable — check format)")
+else:
+    logger.info("YT_PROXY not set — requests go directly from this server's IP")
+
+
+def youtube_transcript_api_client(cookies_path):
+    """Build a YouTubeTranscriptApi client with proxy + cookies if configured."""
+    kwargs = {}
+    if cookies_path:
+        kwargs["cookie_path"] = cookies_path
+    if YT_PROXY:
+        kwargs["proxy_config"] = GenericProxyConfig(
+            http_url=YT_PROXY,
+            https_url=YT_PROXY,
+        )
+    return YouTubeTranscriptApi(**kwargs)
+
 
 def get_cookies_path():
     """Locate a cookies.txt; return None if not present."""
@@ -88,11 +114,7 @@ def preferred_lang_code(preferred_lang):
 def fetch_youtube_transcript_api(video_id, preferred_lang=None):
     """Fast path — hits YouTube's timedtext endpoint directly. Returns None on any failure."""
     cookies_path = get_cookies_path()
-    api = (
-        YouTubeTranscriptApi(cookie_path=cookies_path)
-        if cookies_path
-        else YouTubeTranscriptApi()
-    )
+    api = youtube_transcript_api_client(cookies_path)
 
     try:
         transcript_list = api.list(video_id)
@@ -172,9 +194,8 @@ def fetch_ytdlp_subtitles(video_id, preferred_lang=None):
             "no_warnings": True,
             "retries": 2,
         }
-        proxy = os.getenv("YT_PROXY")
-        if proxy:
-            ydl_opts["proxy"] = proxy
+        if YT_PROXY:
+            ydl_opts["proxy"] = YT_PROXY
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -248,9 +269,8 @@ def fetch_whisper_transcript(video_id):
             "no_warnings": True,
             "retries": 3,
         }
-        proxy = os.getenv("YT_PROXY")
-        if proxy:
-            ydl_opts["proxy"] = proxy
+        if YT_PROXY:
+            ydl_opts["proxy"] = YT_PROXY
             logger.info("Using YT_PROXY for yt-dlp")
 
         logger.info(f"Downloading audio for {video_id} (player_client={','.join(YOUTUBE_PLAYER_CLIENTS)})")
