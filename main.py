@@ -30,9 +30,12 @@ whisper_model = WhisperModel(WHISPER_MODEL, compute_type="int8")
 logger.info("Whisper model loaded")
 
 
-def fetch_youtube_transcript(video_id: str):
-    """Try to get transcript from YouTube's built-in captions."""
-    # Find cookies for authentication
+def fetch_youtube_transcript(video_id: str, preferred_lang: str = None):
+    """
+    Try to get the best possible transcript from YouTube.
+    Priority: manual English → generated English → preferred language
+    (manual or generated) → first available.
+    """
     cookies_path = None
     for candidate in ("/etc/secrets/cookies.txt", "cookies.txt"):
         if os.path.exists(candidate):
@@ -40,33 +43,63 @@ def fetch_youtube_transcript(video_id: str):
             logger.info(f"Using cookies from {candidate} for YouTubeTranscriptApi")
             break
 
-    try:
-        # YouTubeTranscriptApi.get_transcript is the standard way to fetch captions
-        try:
-            transcript = YouTubeTranscriptApi.get_transcript(
-                video_id, 
-                languages=["en", "en-US", "en-GB"], 
-                cookies=cookies_path
-            )
-        except Exception:
-            transcript = YouTubeTranscriptApi.get_transcript(
-                video_id, 
-                cookies=cookies_path
-            )
-    except Exception as e:
-        logger.error(f"YouTubeTranscriptApi failed: {e}")
-        raise e
+    # youtube-transcript-api 1.0+ is instance-based; cookies go in the
+    # constructor (not as a kwarg on list/fetch).
+    api = YouTubeTranscriptApi(cookie_path=cookies_path) if cookies_path else YouTubeTranscriptApi()
 
+    try:
+        transcript_list = api.list(video_id)
+
+        # 1. Manual English
+        try:
+            transcript = transcript_list.find_manually_created_transcript(["en", "en-US", "en-GB"])
+            logger.info(f"Using manual English transcript for {video_id}")
+        except Exception:
+            # 2. Auto-generated English
+            try:
+                transcript = transcript_list.find_generated_transcript(["en", "en-US", "en-GB"])
+                logger.info(f"Using generated English transcript for {video_id}")
+            except Exception:
+                # 3. Preferred language
+                lang_code = None
+                if preferred_lang:
+                    lang_map = {
+                        "Thai": "th", "English": "en",
+                        "Chinese": "zh", "Chinese (Simplified)": "zh-Hans",
+                        "Japanese": "ja", "Korean": "ko",
+                        "Vietnamese": "vi", "Indonesian": "id",
+                        "Spanish": "es", "French": "fr", "German": "de",
+                        "Portuguese": "pt", "Arabic": "ar", "Hindi": "hi",
+                    }
+                    lang_code = lang_map.get(preferred_lang, preferred_lang.lower()[:2])
+
+                try:
+                    if lang_code:
+                        transcript = transcript_list.find_transcript([lang_code])
+                        logger.info(f"Using {lang_code} transcript for {video_id}")
+                    else:
+                        raise Exception("no preferred lang")
+                except Exception:
+                    # 4. First available
+                    transcript = next(iter(transcript_list))
+                    logger.info(f"Using fallback transcript ({transcript.language_code}) for {video_id}")
+
+        data = transcript.fetch()
+    except Exception as e:
+        logger.error(f"YouTubeTranscriptApi failed for {video_id}: {e}")
+        raise
+
+    # 1.0+ returns FetchedTranscriptSnippet objects — attribute access, not dict.
     segments = []
-    for snippet in transcript:
-        start = round(snippet["start"], 2)
+    for snippet in data:
+        start = round(snippet.start, 2)
         if start >= MAX_DURATION_CAPTIONS:
             break
         segments.append(
             {
                 "start_seconds": start,
-                "end_seconds": min(round(snippet["start"] + snippet["duration"], 2), MAX_DURATION_CAPTIONS),
-                "text": snippet["text"],
+                "end_seconds": min(round(snippet.start + snippet.duration, 2), MAX_DURATION_CAPTIONS),
+                "text": snippet.text,
             }
         )
     return segments
@@ -132,7 +165,7 @@ def fetch_whisper_transcript(video_id: str):
             ydl_opts["proxy"] = proxy
             logger.info("Using YT_PROXY for yt-dlp")
 
-        logger.info(f"Downloading audio for {video_id} (player_client=android,ios,web)")
+        logger.info(f"Downloading audio for {video_id} (player_client=ios,android,mweb)")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
@@ -163,11 +196,11 @@ def health():
 
 
 @app.get("/transcript/{video_id}")
-def get_transcript(video_id: str):
+def get_transcript(video_id: str, lang: str = None):
     # Try YouTube captions first
     try:
-        logger.info(f"Trying YouTube captions for {video_id}")
-        segments = fetch_youtube_transcript(video_id)
+        logger.info(f"Trying YouTube captions for {video_id} (preferred lang hint: {lang})")
+        segments = fetch_youtube_transcript(video_id, preferred_lang=lang)
         logger.info(f"Got {len(segments)} segments from YouTube captions")
         return {"video_id": video_id, "segments": segments, "source": "youtube"}
     except Exception as e:
