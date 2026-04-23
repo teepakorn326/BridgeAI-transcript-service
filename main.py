@@ -53,7 +53,7 @@ LANG_MAP = {
     "Hindi": "hi",
 }
 
-YOUTUBE_PLAYER_CLIENTS = ["ios", "android", "mweb"]
+YOUTUBE_PLAYER_CLIENTS = ["web", "tv_embedded", "ios", "android", "mweb"]
 YOUTUBE_MOBILE_UA = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 "
