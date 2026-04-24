@@ -110,6 +110,16 @@ def preferred_lang_code(preferred_lang):
     return LANG_MAP.get(preferred_lang, preferred_lang.lower()[:2])
 
 
+def clamp_end_times(segments):
+    # YouTube auto-captions overlap (each caption fades in before the prior
+    # one fades out). Clamp each end to the next start so frontend matching
+    # picks exactly one active line at any instant.
+    for i in range(len(segments) - 1):
+        if segments[i]["end_seconds"] > segments[i + 1]["start_seconds"]:
+            segments[i]["end_seconds"] = segments[i + 1]["start_seconds"]
+    return segments
+
+
 # ── Path 1: youtube-transcript-api (1.0.x instance API) ────────────────────
 def fetch_youtube_transcript_api(video_id, preferred_lang=None):
     """Fast path — hits YouTube's timedtext endpoint directly. Returns None on any failure."""
@@ -161,7 +171,7 @@ def fetch_youtube_transcript_api(video_id, preferred_lang=None):
             "end_seconds": min(round(snippet.start + snippet.duration, 2), MAX_DURATION_CAPTIONS),
             "text": snippet.text,
         })
-    return segments or None
+    return clamp_end_times(segments) or None
 
 
 # ── Path 2: yt-dlp subtitle download (json3) ───────────────────────────────
@@ -239,7 +249,7 @@ def parse_json3(payload):
             "end_seconds": min(round(start + duration, 2), MAX_DURATION_CAPTIONS),
             "text": text,
         })
-    return segments
+    return clamp_end_times(segments)
 
 
 # ── Path 3: Whisper (download audio, transcribe) ───────────────────────────
