@@ -287,8 +287,25 @@ def fetch_whisper_transcript(video_id):
             logger.info("Using YT_PROXY for yt-dlp")
 
         logger.info(f"Downloading audio for {video_id} (player_client={','.join(YOUTUBE_PLAYER_CLIENTS)})")
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
+        except yt_dlp.utils.DownloadError as e:
+            # download_ranges requires formats that support byte-range
+            # extraction. Some YouTube streams don't, producing
+            # "Requested format is not available". Retry full-download
+            # with a more permissive format spec; we still truncate to
+            # MAX_DURATION_WHISPER in the segment loop below.
+            if "Requested format is not available" not in str(e):
+                raise
+            logger.warning(
+                f"[Whisper] range-download failed for {video_id}, "
+                f"retrying full download: {e}"
+            )
+            ydl_opts.pop("download_ranges", None)
+            ydl_opts["format"] = "bestaudio/best"
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([url])
 
         if not os.path.exists(audio_path) and os.path.exists(audio_path + ".mp3"):
             audio_path = audio_path + ".mp3"
