@@ -6,9 +6,9 @@ import shutil
 import tempfile
 
 import yt_dlp
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from faster_whisper import WhisperModel
+from faster_whisper import BatchedInferencePipeline, WhisperModel
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.proxies import GenericProxyConfig
 
@@ -26,14 +26,18 @@ app.add_middleware(
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "base")
 MAX_DURATION_CAPTIONS = int(os.getenv("MAX_DURATION_CAPTIONS", "14400"))  # 4 hours
-MAX_DURATION_WHISPER = int(os.getenv("MAX_DURATION_WHISPER", "3600"))  # 1 hour
+MAX_DURATION_WHISPER = int(os.getenv("MAX_DURATION_WHISPER", "7200"))  # 2 hours
 
 logger.info(
     f"Loading Whisper model: {WHISPER_MODEL}, "
     f"max captions: {MAX_DURATION_CAPTIONS}s, max whisper: {MAX_DURATION_WHISPER}s"
 )
 whisper_model = WhisperModel(WHISPER_MODEL, compute_type="int8")
-logger.info("Whisper model loaded")
+# BatchedInferencePipeline parallelises VAD-detected speech chunks, typically
+# 3–4× faster on long audio. VAD is mandatory inside the pipeline, so silence
+# is skipped automatically (also reduces hallucinated text on quiet stretches).
+batched_model = BatchedInferencePipeline(model=whisper_model)
+logger.info("Whisper model loaded (batched pipeline)")
 
 # Covers every language in the frontend LANGUAGES list.
 LANG_MAP = {
@@ -310,8 +314,8 @@ def fetch_whisper_transcript(video_id):
         if not os.path.exists(audio_path) and os.path.exists(audio_path + ".mp3"):
             audio_path = audio_path + ".mp3"
 
-        logger.info(f"Transcribing with Whisper ({WHISPER_MODEL})")
-        result_segments, _ = whisper_model.transcribe(audio_path)
+        logger.info(f"Transcribing with Whisper ({WHISPER_MODEL}, batched)")
+        result_segments, _ = batched_model.transcribe(audio_path, batch_size=8)
 
         segments = []
         for seg in result_segments:
@@ -337,10 +341,42 @@ def is_bot_detection(err_msg):
     return any(n in lowered for n in needles)
 
 
+def transcribe_audio_file(audio_path):
+    """Run Whisper on a local audio file and return our segment shape."""
+    logger.info(f"Transcribing uploaded file with Whisper ({WHISPER_MODEL}, batched)")
+    result_segments, _ = batched_model.transcribe(audio_path, batch_size=8)
+    segments = []
+    for seg in result_segments:
+        if seg.start >= MAX_DURATION_WHISPER:
+            break
+        segments.append({
+            "start_seconds": round(seg.start, 2),
+            "end_seconds": min(round(seg.end, 2), MAX_DURATION_WHISPER),
+            "text": seg.text.strip(),
+        })
+    return segments
+
+
 # ── Routes ──────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
     return {"status": "healthy", "service": "transcript-service"}
+
+
+@app.post("/transcribe-upload")
+async def transcribe_upload(file: UploadFile = File(...)):
+    """Whisper-transcribe an uploaded audio file (mp3/wav/m4a/webm/etc.)."""
+    suffix = os.path.splitext(file.filename or "audio")[1] or ".bin"
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = os.path.join(tmpdir, f"upload{suffix}")
+        with open(path, "wb") as f:
+            shutil.copyfileobj(file.file, f)
+        try:
+            segments = transcribe_audio_file(path)
+        except Exception as e:
+            logger.error(f"Whisper upload-transcribe failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Transcription failed: {e}")
+    return {"segments": segments, "source": "whisper-upload"}
 
 
 @app.get("/transcript/{video_id}")
